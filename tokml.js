@@ -11,19 +11,23 @@ module.exports = function tokml(geojson, options) {
         name: 'name',
         description: 'description',
         simplestyle: false,
-        timestamp: 'timestamp'
+        timestamp: 'timestamp',
+        iconurl: null
     };
+
+    var styles = collectStyles(geojson, options);
 
     return '<?xml version="1.0" encoding="UTF-8"?>' +
         tag('kml',
             tag('Document',
                 documentName(options) +
                 documentDescription(options) +
+                documentStyles(styles) +
                 root(geojson, options)
                ), [['xmlns', 'http://www.opengis.net/kml/2.2']]);
 };
 
-function feature(options, styleHashesArray) {
+function feature(options) {
     return function(_) {
         if (!_.properties || !geometry.valid(_.geometry)) return '';
         var geometryString = geometry.any(_.geometry);
@@ -35,24 +39,17 @@ function feature(options, styleHashesArray) {
             var styleHash = hashStyle(_.properties);
             if (styleHash) {
                 if (geometry.isPoint(_.geometry) && hasMarkerStyle(_.properties)) {
-                    if (styleHashesArray.indexOf(styleHash) === -1) {
-                        styleDefinition = markerStyle(_.properties, styleHash);
-                        styleHashesArray.push(styleHash);
-                    }
                     styleReference = tag('styleUrl', '#' + styleHash);
                 } else if ((geometry.isPolygon(_.geometry) || geometry.isLine(_.geometry)) && 
                     hasPolygonAndLineStyle(_.properties)) {
-                    if (styleHashesArray.indexOf(styleHash) === -1) {
-                        styleDefinition = polygonAndLineStyle(_.properties, styleHash);
-                        styleHashesArray.push(styleHash);
-                    }
                     styleReference = tag('styleUrl', '#' + styleHash);
                 }
                 // Note that style of GeometryCollection / MultiGeometry is not supported
             }
         }
         
-        return styleDefinition + tag('Placemark',
+        //return styleDefinition + tag('Placemark',
+        return tag('Placemark',
             name(_.properties, options) +
             description(_.properties, options) +
             extendeddata(_.properties) +
@@ -62,18 +59,96 @@ function feature(options, styleHashesArray) {
     };
 }
 
-function root(_, options) {
-    if (!_.type) return '';
-    var styleHashesArray = [];
+
+function merge( obj1, obj2 ) {
+    if( obj2 == null || obj1 == null ) return;
+
+    var keys = Object.keys(obj2);
+    for( var i=0; i<keys.length; i++ ) {
+        var k = keys[i];
+        obj1[k] = obj2[k];
+    }
+}
+
+function collectStyles(_, options) {
+
+    var styles = {};
+
+    if( Array.isArray(_)) {
+        for( var i=0; i<_.length; i++ ) {
+            var s = collectStyles( _[i], options );
+            merge( styles, s );
+        }
+        return styles;
+    }
+
+    if (!_.type) return styles;      var urlmaker = options ? options.iconurl : null;
             
     switch (_.type) {
         case 'FeatureCollection':
             if (!_.features) return '';
-            return _.features.map(feature(options, styleHashesArray)).join('');
+            for( var i=0; i<_.features.length; i++) {
+                collectFeatureStyle( _.features[i], styles, urlmaker);
+            }
+            break;
+
         case 'Feature':
-            return feature(options, styleHashesArray)(_);
+            collectFeatureStyle(_,styles, urlmaker);
+            break;
+    }
+
+    return styles;
+}
+
+function documentStyles(_) {
+    if( !_ ) return '';
+    return Object.values(_).join('');
+}
+
+function collectFeatureStyle(_, styles, urlmaker) {
+
+    if (!_.properties) return;
+    
+    var styleHash = hashStyle(_.properties);
+    if( !styleHash )
+        return;
+
+    if( styles[styleHash] != null )
+        // already registered style
+        return;
+
+    var styleDefinition = markerStyle(_.properties, styleHash, urlmaker);
+    styles[styleHash] = styleDefinition;
+        
+}
+
+function root(_, options) {
+
+    if( Array.isArray(_) ) {
+        // GeoJSON Array: make folders
+        var res = '';
+        for( var i=0; i<_.length; i++) {
+            var fc = _[i];name
+            var nametag = '';
+            var folderName = fc.name || fc.title;
+            if( folderName )
+                nametag = tag('name', folderName);
+            var x = root( fc, options );
+            res += tag('Folder', nametag + x );
+        }
+        return res;
+    }
+
+    if (!_.type) return '';
+            
+    switch (_.type) {
+        case 'FeatureCollection':
+            if (!_.features) return '';
+            return _.features.map(feature(options)).join('');
+        case 'Feature':
+            return feature(options)(_);
         default:
-            return feature(options, styleHashesArray)({
+            return feature(options)({
                 type: 'Feature',
                 geometry: _,
                 properties: {}
@@ -188,11 +263,11 @@ function hasMarkerStyle(_) {
     return !!(_['marker-size'] || _['marker-symbol'] || _['marker-color']);
 }
 
-function markerStyle(_, styleHash) {
+function markerStyle(_, styleHash, urlmaker) {
     return tag('Style',
         tag('IconStyle',
             tag('Icon',
-                tag('href', iconUrl(_)))) +
+                tag('href', urlmaker ? urlmaker(_) : iconUrl(_)))) +
         iconSize(_), [['id', styleHash]]);
 }
 
